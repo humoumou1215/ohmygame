@@ -31,11 +31,23 @@ describe("coding workspace", () => {
     expect(renderToStaticMarkup(createElement(PreviewView, { ...props, active: true }))).toContain("<iframe");
   });
 
-  it("uses device presets and a fixed fit viewport independent of the preview panel", () => {
+  it("uses device presets, custom dimensions, and a fixed fit viewport", () => {
     expect(playerViewport("mobile")).toEqual({ width: 375, height: 667 });
     expect(playerViewport("mobile-landscape")).toEqual({ width: 667, height: 375 });
     expect(playerViewport("tablet")).toEqual({ width: 768, height: 1024 });
     expect(playerViewport("fit")).toEqual({ width: 1280, height: 720 });
+    expect(playerViewport("custom", { width: 844, height: 390 })).toEqual({ width: 844, height: 390 });
+    expect(playerViewport("custom", { width: 100, height: 9_000 })).toEqual({ width: 240, height: 8192 });
+  });
+
+  it("fits a custom viewport inside the inline preview", () => {
+    const html = renderToStaticMarkup(createElement(PreviewView, {
+      project: previewProject, reload: 0, revision: 0, url: previewProject.preview.url,
+      viewport: "custom", customViewport: { width: 844, height: 390 },
+    }));
+    expect(html).toContain("viewer-stage-custom");
+    expect(html).toContain("width:min(844px, 100%)");
+    expect(html).toContain("aspect-ratio:844 / 390");
   });
 
   it("browses project assets as Library tiles with the source and use filters, without file mutation menus", () => {

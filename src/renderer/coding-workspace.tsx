@@ -73,6 +73,11 @@ const DesignDocumentPanel = lazy(() => import("./design-document-panel.js").then
 type WorkspaceContextMenu = { path: string; directory: boolean; x: number; y: number };
 type WorkspaceFileChange = { from?: string; to?: string };
 type WorkspaceEntryAction = "new-file" | "new-folder" | "rename" | "delete" | "copy-path" | "save-library";
+type PreviewViewportSelection = PreviewViewport | "custom";
+export interface PreviewViewportSize { width: number; height: number }
+const CUSTOM_PREVIEW_MIN = 240;
+const CUSTOM_PREVIEW_MAX = 8192;
+const DEFAULT_CUSTOM_PREVIEW_VIEWPORT: PreviewViewportSize = { width: 844, height: 390 };
 
 export function workspacePathAfterChange(selectedPath: string | undefined, change: WorkspaceFileChange): string | undefined {
   if (!change.from) return change.to ?? selectedPath;
@@ -176,7 +181,8 @@ export function CodingWorkspace({
     onDesignSaveReady?.(saveDesign);
     return () => onDesignSaveReady?.(undefined);
   }, [documentsOpened, onDesignSaveReady, saveDesign]);
-  const [viewport, setViewport] = useState<PreviewViewport>(project?.previewViewport ?? "fit");
+  const [viewport, setViewport] = useState<PreviewViewportSelection>(project?.previewViewport ?? "fit");
+  const [customViewport, setCustomViewport] = useState<PreviewViewportSize>({ ...DEFAULT_CUSTOM_PREVIEW_VIEWPORT });
   const [previewPath, setPreviewPath] = useState(project?.previewPath ?? "/");
   const [previewClient] = useState(() => crypto.randomUUID());
   const [actualPreviewPath, setActualPreviewPath] = useState(project?.previewPath ?? "/");
@@ -230,6 +236,7 @@ export function CodingWorkspace({
 
   useEffect(() => {
     setViewport(project?.previewViewport ?? "fit");
+    setCustomViewport({ ...DEFAULT_CUSTOM_PREVIEW_VIEWPORT });
   }, [project?.id, project?.previewViewport]);
 
   useEffect(() => {
@@ -326,7 +333,7 @@ export function CodingWorkspace({
   }
 
   function playGame(): void {
-    void player.play({ path: actualPreviewPath, viewport: playerViewport(viewport) });
+    void player.play({ path: actualPreviewPath, viewport: playerViewport(viewport, customViewport) });
   }
 
   async function toggleAgentPlaytestWatch(): Promise<void> {
@@ -393,6 +400,7 @@ export function CodingWorkspace({
           refreshDisabled={!project || preview?.status === "waiting" || preview?.status === "starting"}
           refreshLabel={preview?.status === "ready" ? t("workspace.reloadPreview") : t("workspace.restartPreview")}
           viewport={viewport}
+          customViewport={customViewport}
           agentPlaytestWatch={agentPlaytestWatch}
           agentPlaytestWatchPending={agentPlaytestWatchPending}
           picking={picking}
@@ -404,6 +412,7 @@ export function CodingWorkspace({
           onTogglePicking={() => void setPicking(!picking)}
           onToggleAgentPlaytestWatch={() => void toggleAgentPlaytestWatch()}
           onViewportChange={setViewport}
+          onCustomViewportChange={setCustomViewport}
         />
         {panels ? null : playButton}
       </> : undefined,
@@ -412,7 +421,7 @@ export function CodingWorkspace({
           <div className="coding-workspace-preview-panel">
             <ErrorBoundary label={t("errorBoundary.label.preview")} resetKey={previewPageUrl}>
             <PreviewView
-              project={project} client={gameClient} onAskAgent={onAskAgent} onLogs={() => setLogsOpen(true)} onOpenFile={(path) => { openCode(path); void selectFile(path); }} reload={reload} revision={workspaceRevision} url={previewPageUrl} viewport={viewport}
+              project={project} client={gameClient} onAskAgent={onAskAgent} onLogs={() => setLogsOpen(true)} onOpenFile={(path) => { openCode(path); void selectFile(path); }} reload={reload} revision={workspaceRevision} url={previewPageUrl} viewport={viewport} customViewport={customViewport}
               pausedAfterRecovery={previewPaused}
               active={shows("preview")} playerOpen={player.open} suspended={player.suspended} pending={player.pending || player.checking}
               error={player.error} onPlay={playGame} stageRef={previewStage}
@@ -530,6 +539,7 @@ function PreviewControls({
   refreshDisabled,
   refreshLabel,
   viewport,
+  customViewport,
   agentPlaytestWatch,
   agentPlaytestWatchPending,
   picking,
@@ -541,6 +551,7 @@ function PreviewControls({
   onTogglePicking,
   onToggleAgentPlaytestWatch,
   onViewportChange,
+  onCustomViewportChange,
 }: {
   path: string;
   paths: string[];
@@ -548,7 +559,8 @@ function PreviewControls({
   previewUrl?: string;
   refreshDisabled: boolean;
   refreshLabel: string;
-  viewport: PreviewViewport;
+  viewport: PreviewViewportSelection;
+  customViewport: PreviewViewportSize;
   agentPlaytestWatch?: PlaytestWatchState;
   agentPlaytestWatchPending: boolean;
   picking: boolean;
@@ -559,13 +571,15 @@ function PreviewControls({
   onRestart: () => void;
   onTogglePicking: () => void;
   onToggleAgentPlaytestWatch: () => void;
-  onViewportChange: (viewport: PreviewViewport) => void;
+  onViewportChange: (viewport: PreviewViewportSelection) => void;
+  onCustomViewportChange: (viewport: PreviewViewportSize) => void;
 }) {
   // Like a browser's toolbar: where the preview is, then how it shows, then the rest.
   return (
     <div className="preview-controls">
       <PreviewLocation disabled={!previewUrl} path={path} paths={paths} onNavigate={onNavigate} />
-      <ViewportMenu value={viewport} onChange={onViewportChange} />
+      <ViewportMenu value={viewport} customViewport={customViewport} onChange={onViewportChange} />
+      {viewport === "custom" ? <CustomViewportFields value={customViewport} onChange={onCustomViewportChange} /> : null}
       <IconButton size="sm" className="preview-pick-button" label={picking ? t("workspace.stopPicking") : t("workspace.pickElement")}
         active={picking} disabled={pickDisabled && !picking} onClick={onTogglePicking}><MousePointer2 size={14} /></IconButton>
       {/* Only while the agent plays the game, or the window was asked for, does the toggle do anything. */}
@@ -716,7 +730,7 @@ function PreviewLocation({
   );
 }
 
-function ViewportMenu({ value, onChange }: { value: PreviewViewport; onChange: (value: PreviewViewport) => void }) {
+function ViewportMenu({ value, customViewport, onChange }: { value: PreviewViewportSelection; customViewport: PreviewViewportSize; onChange: (value: PreviewViewportSelection) => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -751,7 +765,7 @@ function ViewportMenu({ value, onChange }: { value: PreviewViewport; onChange: (
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={t("workspace.viewportLabel")}
-        title={viewportLabel(value)}
+        title={viewportLabel(value, customViewport)}
         onClick={() => setOpen((current) => !current)}
       >
         <ViewportIcon viewport={value} />
@@ -777,36 +791,106 @@ function ViewportMenu({ value, onChange }: { value: PreviewViewport; onChange: (
               {viewport === value ? <Check size={13} /> : null}
             </button>
           ))}
+          <button
+            className="viewport-option"
+            type="button"
+            role="menuitemradio"
+            aria-checked={value === "custom"}
+            onClick={() => {
+              onChange("custom");
+              setOpen(false);
+              trigger.current?.focus();
+            }}
+          >
+            <Pencil size={14} />
+            <span>{viewportLabel("custom", customViewport)}</span>
+            {value === "custom" ? <Check size={13} /> : null}
+          </button>
         </div>
       ) : null}
     </div>
   );
 }
 
-function ViewportIcon({ viewport }: { viewport: PreviewViewport }) {
+function CustomViewportFields({ value, onChange }: { value: PreviewViewportSize; onChange: (value: PreviewViewportSize) => void }) {
+  const [width, setWidth] = useState(String(value.width));
+  const [height, setHeight] = useState(String(value.height));
+  useEffect(() => { setWidth(String(value.width)); }, [value.width]);
+  useEffect(() => { setHeight(String(value.height)); }, [value.height]);
+
+  function update(dimension: keyof PreviewViewportSize, draft: string, setDraft: (value: string) => void): void {
+    setDraft(draft);
+    if (!draft.trim()) return;
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed < CUSTOM_PREVIEW_MIN || parsed > CUSTOM_PREVIEW_MAX) return;
+    const next = Math.round(parsed);
+    if (next !== value[dimension]) onChange({ ...value, [dimension]: next });
+  }
+
+  function commit(dimension: keyof PreviewViewportSize, draft: string, setDraft: (value: string) => void): void {
+    const next = normalizePreviewDimension(Number(draft), value[dimension]);
+    setDraft(String(next));
+    if (next !== value[dimension]) onChange({ ...value, [dimension]: next });
+  }
+
+  const inputStyle: CSSProperties = {
+    width: 62,
+    height: 26,
+    padding: "0 6px",
+    border: "1px solid var(--color-border)",
+    borderRadius: 5,
+    background: "var(--color-surface)",
+    color: "var(--color-text)",
+    font: "inherit",
+  };
+  return <div role="group" aria-label={t("workspace.viewportLabel")} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <input type="number" min={CUSTOM_PREVIEW_MIN} max={CUSTOM_PREVIEW_MAX} step={1} value={width} style={inputStyle}
+      aria-label={`${t("workspace.viewportLabel")} W`} title={`${CUSTOM_PREVIEW_MIN}–${CUSTOM_PREVIEW_MAX}px`}
+      onChange={(event) => update("width", event.target.value, setWidth)} onBlur={() => commit("width", width, setWidth)}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+    <span aria-hidden="true">×</span>
+    <input type="number" min={CUSTOM_PREVIEW_MIN} max={CUSTOM_PREVIEW_MAX} step={1} value={height} style={inputStyle}
+      aria-label={`${t("workspace.viewportLabel")} H`} title={`${CUSTOM_PREVIEW_MIN}–${CUSTOM_PREVIEW_MAX}px`}
+      onChange={(event) => update("height", event.target.value, setHeight)} onBlur={() => commit("height", height, setHeight)}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+  </div>;
+}
+
+function ViewportIcon({ viewport }: { viewport: PreviewViewportSelection }) {
   if (viewport === "tablet") return <Tablet size={14} />;
   if (viewport === "mobile") return <Smartphone size={14} />;
   if (viewport === "mobile-landscape") return <Smartphone size={14} style={{ transform: "rotate(90deg)" }} />;
+  if (viewport === "custom") return <Pencil size={14} />;
   return <Monitor size={14} />;
 }
 
-function viewportLabel(viewport: PreviewViewport): string {
+function viewportLabel(viewport: PreviewViewportSelection, customViewport: PreviewViewportSize = DEFAULT_CUSTOM_PREVIEW_VIEWPORT): string {
   if (viewport === "tablet") return t("workspace.viewport.tablet");
   if (viewport === "mobile") return t("workspace.viewport.mobile");
   if (viewport === "mobile-landscape") return t("workspace.viewport.mobileLandscape");
+  if (viewport === "custom") return `${customViewport.width} × ${customViewport.height}`;
   return t("projectSettings.device.fit");
 }
 
-export function playerViewport(viewport: PreviewViewport): { width: number; height: number } {
+function normalizePreviewDimension(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(CUSTOM_PREVIEW_MAX, Math.max(CUSTOM_PREVIEW_MIN, Math.round(value)));
+}
+
+export function playerViewport(viewport: PreviewViewportSelection, customViewport: PreviewViewportSize = DEFAULT_CUSTOM_PREVIEW_VIEWPORT): { width: number; height: number } {
+  if (viewport === "custom") return {
+    width: normalizePreviewDimension(customViewport.width, DEFAULT_CUSTOM_PREVIEW_VIEWPORT.width),
+    height: normalizePreviewDimension(customViewport.height, DEFAULT_CUSTOM_PREVIEW_VIEWPORT.height),
+  };
   if (viewport === "mobile") return { width: 375, height: 667 };
   if (viewport === "mobile-landscape") return { width: 667, height: 375 };
   if (viewport === "tablet") return { width: 768, height: 1024 };
   return { width: 1280, height: 720 };
 }
 
-export function PreviewView({ project, client, onAskAgent, onOpenFile, onLogs, reload, revision, url, viewport, active = true, playerOpen = false, suspended = false, pending = false, pausedAfterRecovery = false, error, onPlay, onRetry, onSettings, stageRef }: {
+export function PreviewView({ project, client, onAskAgent, onOpenFile, onLogs, reload, revision, url, viewport, customViewport = DEFAULT_CUSTOM_PREVIEW_VIEWPORT, active = true, playerOpen = false, suspended = false, pending = false, pausedAfterRecovery = false, error, onPlay, onRetry, onSettings, stageRef }: {
   client?: string; onAskAgent?: (text: string) => void; onOpenFile?: (path: string) => void; onLogs?: () => void;
-  project?: ProjectState; reload: number; revision: number; url?: string; viewport: PreviewViewport;
+  project?: ProjectState; reload: number; revision: number; url?: string; viewport: PreviewViewportSelection; customViewport?: PreviewViewportSize;
   active?: boolean; playerOpen?: boolean; suspended?: boolean; pending?: boolean; error?: string; onPlay?: () => void;
   pausedAfterRecovery?: boolean;
   stageRef?: React.Ref<HTMLDivElement>;
@@ -863,9 +947,15 @@ export function PreviewView({ project, client, onAskAgent, onOpenFile, onLogs, r
   }
 
   const showFrame = (active || started || (native && playerOpen)) && (native || !suspended) && preview?.status === "ready" && url;
+  const customFrame = viewport === "custom" ? playerViewport(viewport, customViewport) : undefined;
+  const customFrameStyle: CSSProperties | undefined = customFrame ? {
+    width: `min(${customFrame.width}px, 100%)`,
+    height: "auto",
+    aspectRatio: `${customFrame.width} / ${customFrame.height}`,
+  } : undefined;
   return (
-    <div ref={stageRef} className={`viewer-stage viewer-stage-${viewport}`}>
-      {showFrame ? <div className="preview-frame-wrap" hidden={suspended}>
+    <div ref={stageRef} className={`viewer-stage viewer-stage-${viewport}`} style={viewport === "custom" ? { padding: 10, overflow: "auto" } : undefined}>
+      {showFrame ? <div className="preview-frame-wrap" hidden={suspended} style={customFrameStyle}>
         {native && project ? <DesktopGamePreview
           bridge={native} refresh={window.ohMyGameDesktop!.webGamePlayer!.refresh} projectId={project.id} url={url!} reload={reload}
           visible={active && !suspended && !diagnostic && !error && runtime.status === "ready"}
